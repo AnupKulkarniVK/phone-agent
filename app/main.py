@@ -1,6 +1,6 @@
 """
 Main FastAPI application for phone agent
-Handles incoming calls from Twilio
+Handles incoming calls from Twilio with Claude AI
 """
 
 from fastapi import FastAPI, Request, Response
@@ -8,10 +8,18 @@ from fastapi.responses import PlainTextResponse
 import os
 from dotenv import load_dotenv
 
+# Import our LLM service
+import sys
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from services.llm import llm_service
+
 load_dotenv()
 
 # Create FastAPI app
-app = FastAPI(title="Phone Agent API", version="2.0.0")
+app = FastAPI(title="Phone Agent API", version="2.1.0")
+
+# In-memory conversation storage (temporary - will improve later)
+conversations = {}
 
 
 @app.get("/")
@@ -20,8 +28,8 @@ async def read_root():
     return {
         "status": "running",
         "service": "phone-agent",
-        "message": "Phone Agent API is running.",
-        "version": "2.0.0 - Speech Recognition"
+        "message": "Phone Agent API with Claude AI",
+        "version": "2.1.0 - Claude Integration"
     }
 
 
@@ -32,6 +40,13 @@ async def handle_voice_call(request: Request):
 
     When someone calls, we greet them and gather their speech input.
     """
+
+    # Get call SID to track conversation
+    form_data = await request.form()
+    call_sid = form_data.get("CallSid", "unknown")
+
+    # Initialize conversation for this call
+    conversations[call_sid] = []
 
     # Greet and gather speech input
     twiml_response = """<?xml version="1.0" encoding="UTF-8"?>
@@ -51,29 +66,54 @@ async def handle_voice_call(request: Request):
 @app.post(path="/process-speech")
 async def process_speech(request: Request):
     """
-    Process the speech input from Twilio.
+    Process the speech input using Claude AI.
 
-    Twilio sends the transcribed text here.
+    Twilio sends the transcribed text here, we ask Claude for a response.
     """
     # Get form data from Twilio
     form_data = await request.form()
 
     # Get the transcribed speech
     user_speech = form_data.get("SpeechResult", "")
+    call_sid = form_data.get("CallSid", "unknown")
     confidence = form_data.get("Confidence", "0")
 
-    print(f"User said: {user_speech} (confidence: {confidence})")
+    print(f"[{call_sid}] User said: {user_speech} (confidence: {confidence})")
 
-    # For now, just echo back what they said
+    # Get conversation history for this call
+    conversation = conversations.get(call_sid, [])
+
+    # Add user message to conversation
+    conversation.append({
+        "role": "user",
+        "content": user_speech
+    })
+
+    # Get Claude's response
+    try:
+        ai_response = llm_service.get_response(user_speech, conversation)
+        print(f"[{call_sid}] Claude responded: {ai_response}")
+
+        # Add Claude's response to conversation
+        conversation.append({
+            "role": "assistant",
+            "content": ai_response
+        })
+
+        # Update conversation history
+        conversations[call_sid] = conversation
+
+    except Exception as e:
+        print(f"Error getting AI response: {e}")
+        ai_response = "I'm sorry, I'm having trouble right now. Please call back later."
+
+    # Continue gathering speech or end call
     twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Joanna">
-        You said: {user_speech}. Let me think about that.
-    </Say>
-    <Pause length="1"/>
-    <Say voice="Polly.Joanna">
-        I'm connecting to my AI brain to help you better. This is exciting!
-    </Say>
+    <Gather input="speech" action="/process-speech" method="POST" timeout="3" speechTimeout="auto">
+        <Say voice="Polly.Joanna">{ai_response}</Say>
+    </Gather>
+    <Say voice="Polly.Joanna">Thank you for calling Luigi's! Goodbye!</Say>
 </Response>"""
 
     return Response(content=twiml_response, media_type="application/xml")
@@ -84,7 +124,8 @@ async def health_check():
     """Health check endpoint for monitoring"""
     return {
         "status": "healthy",
-        "features": ["speech_recognition", "voice_response"]
+        "features": ["speech_recognition", "claude_ai", "voice_response"],
+        "active_conversations": len(conversations)
     }
 
 
