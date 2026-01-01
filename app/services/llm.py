@@ -2,7 +2,11 @@
 LLM Service - Handles communication with Claude API
 """
 import os
+from dotenv import load_dotenv
 from anthropic import Anthropic
+
+# Load environment variables
+load_dotenv()
 
 
 class LLMService:
