@@ -13,6 +13,31 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.services.database import get_db, Reservation, Table
 
 
+def get_current_date() -> Dict[str, Any]:
+    """
+    Get the current date and time information.
+    Use this tool to know what "today", "tomorrow", "this week" means.
+
+    Returns:
+        Dict with current date info
+    """
+    now = datetime.now()
+    tomorrow = now + timedelta(days=1)
+    next_week = now + timedelta(days=7)
+
+    return {
+        "current_datetime": now.isoformat(),
+        "today": now.strftime("%Y-%m-%d"),
+        "today_day_of_week": now.strftime("%A"),
+        "tomorrow": tomorrow.strftime("%Y-%m-%d"),
+        "tomorrow_day_of_week": tomorrow.strftime("%A"),
+        "next_week": next_week.strftime("%Y-%m-%d"),
+        "current_time": now.strftime("%H:%M"),
+        "year": now.year,
+        "month": now.month,
+        "day": now.day
+    }
+
 
 def check_availability(party_size: int, date: str, time: str) -> Dict[str, Any]:
     """
@@ -318,6 +343,15 @@ def suggest_alternative_times(date: str, requested_time: str, party_size: int, d
 # Tool definitions for Claude (function calling schema)
 TOOL_DEFINITIONS = [
     {
+        "name": "get_current_date",
+        "description": "Get today's date and time. ALWAYS use this first when user says 'today', 'tomorrow', 'this week', 'next week', or any relative date. This tells you what the actual calendar date is.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
         "name": "check_availability",
         "description": "Check if restaurant has available tables for a given party size, date, and time. Use this BEFORE creating a reservation.",
         "input_schema": {
@@ -409,6 +443,7 @@ TOOL_DEFINITIONS = [
 
 # Map tool names to functions
 TOOL_FUNCTIONS = {
+    "get_current_date": get_current_date,
     "check_availability": check_availability,
     "create_reservation": create_reservation,
     "get_reservations": get_reservations,
