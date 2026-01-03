@@ -205,6 +205,49 @@ async def process_speech(request: Request):
                     if fb_block["type"] == "text":
                         assistant_text = fb_block["text"]
                         print(f"[{call_sid}] Claude (after tool): {assistant_text}")
+                    elif fb_block["type"] == "tool_use":
+                        # Claude wants to call ANOTHER tool (chaining)
+                        # This happens when get_current_date → check_availability
+                        print(f"[{call_sid}] Claude chaining to another tool: {fb_block['name']}")
+
+                        # Execute the chained tool
+                        chained_func = TOOL_FUNCTIONS[fb_block["name"]]
+                        chained_input = fb_block["input"]
+
+                        if fb_block["name"] == "create_reservation":
+                            chained_input["phone"] = caller_phone
+                            chained_input["call_sid"] = call_sid
+
+                        chained_result = chained_func(**chained_input)
+                        print(f"[{call_sid}] Chained tool result: {chained_result}")
+
+                        # Add chained tool use to conversation
+                        messages.append({
+                            "role": "assistant",
+                            "content": followup["content"]
+                        })
+
+                        messages.append({
+                            "role": "user",
+                            "content": [{
+                                "type": "tool_result",
+                                "tool_use_id": fb_block["id"],
+                                "content": json.dumps(chained_result)
+                            }]
+                        })
+
+                        # Get Claude's final response after chained tool
+                        final_response = llm_service.get_response_with_tools(
+                            "",
+                            conversation_history=messages,
+                            tools=TOOL_DEFINITIONS
+                        )
+
+                        # Extract final text
+                        for final_block in final_response["content"]:
+                            if final_block["type"] == "text":
+                                assistant_text = final_block["text"]
+                                print(f"[{call_sid}] Claude (final): {assistant_text}")
 
             except Exception as e:
                 print(f"[{call_sid}] Error executing tool: {e}")
