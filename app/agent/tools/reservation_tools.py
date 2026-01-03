@@ -1,6 +1,6 @@
 """
 Restaurant reservation tools for Claude AI function calling
-These are the actions the AI agent can perform
+Proper table assignment - each reservation gets a specific table
 """
 from datetime import datetime, timedelta
 from typing import Dict, List, Any
@@ -17,6 +17,7 @@ from app.services.database import get_db, Reservation, Table
 def check_availability(party_size: int, date: str, time: str) -> Dict[str, Any]:
     """
     Check if restaurant has available tables for given party size, date, and time.
+    Uses PROPER table assignment - checks which specific tables are available.
 
     Args:
         party_size: Number of people
@@ -24,11 +25,11 @@ def check_availability(party_size: int, date: str, time: str) -> Dict[str, Any]:
         time: Time in HH:MM format (24-hour)
 
     Returns:
-        Dict with availability info
+        Dict with availability info and available table IDs
     """
     db = get_db()
     try:
-        # Find tables that can accommodate party size
+        # STEP 1: Find ALL tables that can accommodate this party size
         suitable_tables = db.query(Table).filter(
             Table.capacity >= party_size,
             Table.is_active == True
@@ -41,30 +42,39 @@ def check_availability(party_size: int, date: str, time: str) -> Dict[str, Any]:
                 "suggested_alternatives": []
             }
 
-        # Check if any are already reserved at this time
-        # (Simple logic: one reservation per time slot for now)
-        existing = db.query(Reservation).filter(
+        # STEP 2: Find which tables are ALREADY ASSIGNED for this date/time
+        booked_reservations = db.query(Reservation).filter(
             Reservation.date == date,
             Reservation.time == time,
-            Reservation.status == 'confirmed'
+            Reservation.status == 'confirmed',
+            Reservation.assigned_table_id.isnot(None)  # Only confirmed assignments
         ).all()
 
-        # Count how many tables are booked
-        booked_count = len(existing)
-        total_suitable = len(suitable_tables)
+        # Get set of booked table IDs
+        booked_table_ids = {res.assigned_table_id for res in booked_reservations}
 
-        if booked_count >= total_suitable:
-            # All tables booked, suggest alternative times
+        # STEP 3: Filter to only AVAILABLE tables (not in booked list)
+        available_tables = [
+            table for table in suitable_tables
+            if table.id not in booked_table_ids
+        ]
+
+        if not available_tables:
+            # No tables available - suggest alternative times
             alternatives = suggest_alternative_times(date, time, party_size, db)
             return {
                 "available": False,
-                "reason": f"All tables for {party_size} are booked at {time}",
-                "suggested_alternatives": alternatives
+                "reason": f"All tables for {party_size}+ people are booked at {time}",
+                "suggested_alternatives": alternatives,
+                "booked_tables": len(booked_table_ids),
+                "total_suitable_tables": len(suitable_tables)
             }
 
+        # STEP 4: Return available tables (we'll pick the best one when creating reservation)
         return {
             "available": True,
-            "tables_available": total_suitable - booked_count,
+            "available_tables": [{"id": t.id, "number": t.table_number, "capacity": t.capacity} for t in available_tables],
+            "count": len(available_tables),
             "party_size": party_size,
             "date": date,
             "time": time
@@ -83,7 +93,12 @@ def create_reservation(
         call_sid: str = None
 ) -> Dict[str, Any]:
     """
-    Create a new reservation.
+    Create a new reservation with SPECIFIC table assignment.
+
+    Algorithm:
+    1. Check availability to get list of available tables
+    2. Pick the SMALLEST table that fits (optimize space)
+    3. Create reservation with assigned_table_id
 
     Args:
         name: Customer name
@@ -94,11 +109,11 @@ def create_reservation(
         call_sid: Twilio call ID (optional)
 
     Returns:
-        Dict with reservation details
+        Dict with reservation details including assigned table
     """
     db = get_db()
     try:
-        # First check availability
+        # STEP 1: Check availability
         availability = check_availability(party_size, date, time)
 
         if not availability["available"]:
@@ -108,7 +123,13 @@ def create_reservation(
                 "suggested_alternatives": availability.get("suggested_alternatives", [])
             }
 
-        # Create reservation
+        # STEP 2: Pick the BEST table (smallest that fits = optimal space usage)
+        available_tables = availability["available_tables"]
+
+        # Sort by capacity (smallest first)
+        best_table = min(available_tables, key=lambda t: t["capacity"])
+
+        # STEP 3: Create reservation WITH assigned table
         reservation = Reservation(
             name=name,
             phone=phone,
@@ -116,6 +137,7 @@ def create_reservation(
             date=date,
             time=time,
             status='confirmed',
+            assigned_table_id=best_table["id"],  # ← KEY: Assign specific table
             call_sid=call_sid
         )
 
@@ -130,11 +152,17 @@ def create_reservation(
             "party_size": party_size,
             "date": date,
             "time": time,
-            "status": "confirmed"
+            "status": "confirmed",
+            "assigned_table": {
+                "table_id": best_table["id"],
+                "table_number": best_table["number"],
+                "table_capacity": best_table["capacity"]
+            }
         }
 
     except Exception as e:
         db.rollback()
+        print(f"Error creating reservation: {e}")
         return {
             "success": False,
             "error": f"Failed to create reservation: {str(e)}"
@@ -212,13 +240,20 @@ def cancel_reservation(reservation_id: int = None, name: str = None, date: str =
                 "error": "No reservation found"
             }
 
-        # Cancel it
+        # Get table info before canceling (for response message)
+        table_info = ""
+        if reservation.assigned_table_id:
+            table = db.query(Table).filter(Table.id == reservation.assigned_table_id).first()
+            if table:
+                table_info = f" (Table {table.table_number})"
+
+        # Cancel it (this frees up the table automatically)
         reservation.status = 'cancelled'
         db.commit()
 
         return {
             "success": True,
-            "message": f"Cancelled reservation for {reservation.name} on {reservation.date} at {reservation.time}",
+            "message": f"Cancelled reservation for {reservation.name} on {reservation.date} at {reservation.time}{table_info}",
             "reservation": reservation.to_dict()
         }
 
@@ -233,24 +268,49 @@ def cancel_reservation(reservation_id: int = None, name: str = None, date: str =
 
 
 def suggest_alternative_times(date: str, requested_time: str, party_size: int, db) -> List[str]:
-    """Suggest alternative time slots if requested time is unavailable"""
-    from datetime import datetime, timedelta
-
+    """
+    Suggest alternative time slots if requested time is unavailable.
+    Checks actual table availability for each alternative.
+    """
     alternatives = []
     base_time = datetime.strptime(requested_time, "%H:%M")
 
-    # Try ±30 min, ±1 hour
-    time_offsets = [-60, -30, 30, 60]
+    # Try ±30 min, ±1 hour, ±90 min
+    time_offsets = [-90, -60, -30, 30, 60, 90]
 
     for offset in time_offsets:
         alt_time = (base_time + timedelta(minutes=offset)).strftime("%H:%M")
 
-        # Check if this time is available
-        result = check_availability(party_size, date, alt_time)
-        if result.get("available"):
-            alternatives.append(alt_time)
-            if len(alternatives) >= 2:  # Suggest max 2 alternatives
-                break
+        # Make sure it's within restaurant hours (5pm - 10pm)
+        alt_hour = int(alt_time.split(':')[0])
+        if alt_hour < 17 or alt_hour >= 22:  # Before 5pm or after 10pm
+            continue
+
+        # Check if this time is actually available
+        # Re-use our check_availability function
+        temp_db = get_db()
+        try:
+            suitable_tables = temp_db.query(Table).filter(
+                Table.capacity >= party_size,
+                Table.is_active == True
+            ).all()
+
+            booked = temp_db.query(Reservation).filter(
+                Reservation.date == date,
+                Reservation.time == alt_time,
+                Reservation.status == 'confirmed',
+                Reservation.assigned_table_id.isnot(None)
+            ).all()
+
+            booked_ids = {r.assigned_table_id for r in booked}
+            available = [t for t in suitable_tables if t.id not in booked_ids]
+
+            if available:
+                alternatives.append(alt_time)
+                if len(alternatives) >= 3:  # Suggest max 3 alternatives
+                    break
+        finally:
+            temp_db.close()
 
     return alternatives
 

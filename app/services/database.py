@@ -23,6 +23,7 @@ class Reservation(Base):
     date = Column(String(20), nullable=False)  # YYYY-MM-DD format
     time = Column(String(10), nullable=False)  # HH:MM format (24-hour)
     status = Column(String(20), default='confirmed')  # confirmed, cancelled, completed
+    assigned_table_id = Column(Integer)  # Which specific table is assigned
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     call_sid = Column(String(100))  # Twilio call ID
@@ -40,6 +41,7 @@ class Reservation(Base):
             'date': self.date,
             'time': self.time,
             'status': self.status,
+            'assigned_table_id': self.assigned_table_id,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
 
