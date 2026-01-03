@@ -12,9 +12,15 @@ venv/
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # OS
 .DS_Store
 
 # Logs
 *.log
+
+# Do NOT ignore static files - we want to commit them
+# static/sounds/*.mp3
+# static/sounds/*.wav
