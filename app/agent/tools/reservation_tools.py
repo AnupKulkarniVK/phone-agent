@@ -12,6 +12,7 @@ from fuzzywuzzy import fuzz
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.services.database import get_db, Reservation, Table
+from app.services.sms_service import sms_service
 
 
 def fuzzy_match_name(search_name: str, database_name: str, threshold: int = 75) -> bool:
@@ -204,6 +205,17 @@ def create_reservation(
         db.commit()
         db.refresh(reservation)
 
+        # Send confirmation SMS if phone number provided
+        if phone:
+            sms_service.send_confirmation_sms(
+                to_phone=phone,
+                name=name,
+                party_size=party_size,
+                date=date,
+                time=time,
+                table_number=best_table["number"]
+            )
+
         return {
             "success": True,
             "reservation_id": reservation.id,
@@ -343,6 +355,15 @@ def cancel_reservation(reservation_id: int = None, name: str = None, date: str =
         # Cancel it (this frees up the table automatically)
         reservation.status = 'cancelled'
         db.commit()
+
+        # Send cancellation SMS if phone number available
+        if reservation.phone:
+            sms_service.send_cancellation_sms(
+                to_phone=reservation.phone,
+                name=reservation.name,
+                date=reservation.date,
+                time=reservation.time
+            )
 
         return {
             "success": True,
