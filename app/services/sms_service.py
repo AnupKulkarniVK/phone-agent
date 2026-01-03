@@ -1,12 +1,12 @@
 """
-SMS Service - Send confirmation messages via Twilio
+SMS Service - Send confirmation messages via Twilio (trial-safe)
 """
 import os
-import ssl
 import certifi
 from dotenv import load_dotenv
 from twilio.rest import Client
 from twilio.http.http_client import TwilioHttpClient
+from datetime import datetime
 
 load_dotenv()
 
@@ -14,11 +14,17 @@ load_dotenv()
 class SMSService:
     """Service for sending SMS messages via Twilio"""
 
+    # Leave buffer because Twilio trial may prepend a disclaimer
+    TRIAL_SAFE_LEN = 145
+
     def __init__(self):
         """Initialize Twilio SMS client with proper SSL configuration"""
         account_sid = os.getenv("TWILIO_ACCOUNT_SID")
         auth_token = os.getenv("TWILIO_AUTH_TOKEN")
         self.from_phone = os.getenv("TWILIO_PHONE_NUMBER")
+
+        # Optional: set this in .env for clarity (true/false)
+        self.is_trial = os.getenv("TWILIO_IS_TRIAL", "true").strip().lower() == "true"
 
         if not all([account_sid, auth_token, self.from_phone]):
             print("⚠️  Twilio credentials not fully configured - SMS disabled")
@@ -31,6 +37,91 @@ class SMSService:
 
             self.client = Client(account_sid, auth_token, http_client=http_client)
 
+    # ---------- formatting helpers ----------
+    @staticmethod
+    def _format_date(date_str: str) -> str:
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            return dt.strftime("%b %d, %Y")  # short: "Jan 02, 2026"
+        except Exception:
+            return date_str
+
+    @staticmethod
+    def _format_time(time_str: str) -> str:
+        try:
+            t = datetime.strptime(time_str, "%H:%M")
+            return t.strftime("%I:%M%p").lstrip("0").lower()  # "6:30pm"
+        except Exception:
+            return time_str
+
+    @staticmethod
+    def _strip_non_gsm(s: str) -> str:
+        """
+        Conservative approach: remove emojis / non-basic chars that may push into Unicode.
+        Keeps typical punctuation and ASCII.
+        """
+        return "".join(ch for ch in s if ord(ch) < 128)
+
+    def _enforce_trial_limit(self, message: str) -> str:
+        """
+        Make message safe for trial by:
+        1) If too long, remove non-ascii (emoji/unicode)
+        2) If still too long, truncate
+        """
+        if not self.is_trial:
+            return message
+
+        if len(message) > self.TRIAL_SAFE_LEN:
+            message = self._strip_non_gsm(message)
+
+        if len(message) > self.TRIAL_SAFE_LEN:
+            message = message[: self.TRIAL_SAFE_LEN - 3] + "..."
+
+        return message
+
+    # ---------- message builders ----------
+    def _build_confirmation_message(
+            self, name: str, party_size: int, date: str, time: str, table_number: int = None
+    ) -> str:
+        d = self._format_date(date)
+        t = self._format_time(time)
+        table_info = f" Table {table_number}" if table_number else ""
+
+        # Trial-safe short template
+        msg = (
+            f"Luigi's Italian\n"
+            f"Confirmed: {name}\n"
+            f"{d} {t}{table_info}\n"
+            f"Party {party_size}. 123 Main St SJ."
+        )
+
+        # If for some reason still long, fallback even shorter
+        msg = self._enforce_trial_limit(msg)
+        if self.is_trial and len(msg) > self.TRIAL_SAFE_LEN:
+            msg = f"Luigi's: Confirmed for {name}, {d} {t}. Party {party_size}."
+            msg = self._enforce_trial_limit(msg)
+
+        return msg
+
+    def _build_cancellation_message(self, name: str, date: str, time: str) -> str:
+        d = self._format_date(date)
+        t = self._format_time(time)
+
+        msg = (
+            f"Luigi's Italian\n"
+            f"Cancelled: {name}\n"
+            f"{d} {t}\n"
+            f"Call 408-555-LUIGI to rebook."
+        )
+
+        msg = self._enforce_trial_limit(msg)
+        if self.is_trial and len(msg) > self.TRIAL_SAFE_LEN:
+            msg = f"Luigi's: Cancelled for {name}, {d} {t}. Call 408-555-LUIGI."
+            msg = self._enforce_trial_limit(msg)
+
+        return msg
+
+    # ---------- public APIs ----------
     def send_confirmation_sms(
             self,
             to_phone: str,
@@ -40,64 +131,14 @@ class SMSService:
             time: str,
             table_number: int = None
     ) -> bool:
-        """
-        Send reservation confirmation SMS
-
-        Args:
-            to_phone: Customer's phone number
-            name: Customer name
-            party_size: Number of people
-            date: Reservation date (YYYY-MM-DD)
-            time: Reservation time (HH:MM)
-            table_number: Assigned table number
-
-        Returns:
-            True if SMS sent successfully, False otherwise
-        """
         if not self.client:
             print("⚠️  SMS not configured - skipping")
             return False
 
-        # Format the date nicely
-        from datetime import datetime
-        try:
-            dt = datetime.strptime(date, "%Y-%m-%d")
-            formatted_date = dt.strftime("%A, %B %d, %Y")
-        except:
-            formatted_date = date
-
-        # Format time (convert from 24hr to 12hr)
-        try:
-            time_obj = datetime.strptime(time, "%H:%M")
-            formatted_time = time_obj.strftime("%I:%M %p").lstrip("0")
-        except:
-            formatted_time = time
-
-        # Build message
-        table_info = f" at Table {table_number}" if table_number else ""
-
-        message = f"""✅ Luigi's Italian Restaurant
-
-Your reservation is CONFIRMED!
-
-👤 Name: {name}
-👥 Party: {party_size} people
-📅 Date: {formatted_date}
-🕐 Time: {formatted_time}{table_info}
-
-📍 123 Main Street, San Jose, CA
-📞 (408) 555-LUIGI
-
-See you soon! 🍝"""
+        message = self._build_confirmation_message(name, party_size, date, time, table_number)
 
         try:
-            # Send SMS
-            msg = self.client.messages.create(
-                body=message,
-                from_=self.from_phone,
-                to=to_phone
-            )
-
+            msg = self.client.messages.create(body=message, from_=self.from_phone, to=to_phone)
             print(f"✅ SMS sent to {to_phone}: {msg.sid}")
             return True
 
@@ -105,63 +146,15 @@ See you soon! 🍝"""
             print(f"❌ Failed to send SMS: {e}")
             return False
 
-    def send_cancellation_sms(
-            self,
-            to_phone: str,
-            name: str,
-            date: str,
-            time: str
-    ) -> bool:
-        """
-        Send reservation cancellation SMS
-
-        Args:
-            to_phone: Customer's phone number
-            name: Customer name
-            date: Reservation date
-            time: Reservation time
-
-        Returns:
-            True if SMS sent successfully
-        """
+    def send_cancellation_sms(self, to_phone: str, name: str, date: str, time: str) -> bool:
         if not self.client:
             print("⚠️  SMS not configured - skipping")
             return False
 
-        # Format the date and time
-        from datetime import datetime
-        try:
-            dt = datetime.strptime(date, "%Y-%m-%d")
-            formatted_date = dt.strftime("%A, %B %d")
-        except:
-            formatted_date = date
+        message = self._build_cancellation_message(name, date, time)
 
         try:
-            time_obj = datetime.strptime(time, "%H:%M")
-            formatted_time = time_obj.strftime("%I:%M %p").lstrip("0")
-        except:
-            formatted_time = time
-
-        message = f"""❌ Luigi's Italian Restaurant
-
-Your reservation has been CANCELLED.
-
-👤 Name: {name}
-📅 Date: {formatted_date}
-🕐 Time: {formatted_time}
-
-To make a new reservation, call us at:
-📞 +1-833-402-5651
-
-Hope to see you soon! 🍝"""
-
-        try:
-            msg = self.client.messages.create(
-                body=message,
-                from_=self.from_phone,
-                to=to_phone
-            )
-
+            msg = self.client.messages.create(body=message, from_=self.from_phone, to=to_phone)
             print(f"✅ Cancellation SMS sent to {to_phone}: {msg.sid}")
             return True
 
