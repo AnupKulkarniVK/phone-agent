@@ -1,16 +1,50 @@
 """
 Restaurant reservation tools for Claude AI function calling
-Proper table assignment - each reservation gets a specific table
+APPROACH 1: Proper table assignment - each reservation gets a specific table
 """
 from datetime import datetime, timedelta
 from typing import Dict, List, Any
 import sys
 import os
+from fuzzywuzzy import fuzz
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.services.database import get_db, Reservation, Table
+
+
+def fuzzy_match_name(search_name: str, database_name: str, threshold: int = 75) -> bool:
+    """
+    Check if two names match using fuzzy string matching.
+
+    Args:
+        search_name: Name user provided (potentially misspelled)
+        database_name: Name in database
+        threshold: Similarity threshold (0-100), default 75
+
+    Returns:
+        True if names are similar enough
+
+    Examples:
+        fuzzy_match_name("Raji", "Ragi") → True (90% match)
+        fuzzy_match_name("John", "Jon") → True (85% match)
+        fuzzy_match_name("R a g. I", "Ragi") → True (cleaned and matched)
+    """
+    # Clean the names (remove extra spaces, periods, lowercase)
+    clean_search = search_name.lower().replace(".", "").replace(" ", "")
+    clean_db = database_name.lower().replace(".", "").replace(" ", "")
+
+    # Calculate similarity ratio
+    similarity = fuzz.ratio(clean_search, clean_db)
+
+    # Also try partial matching (for cases like "Rag" matching "Ragi")
+    partial_similarity = fuzz.partial_ratio(clean_search, clean_db)
+
+    # Use the higher of the two scores
+    best_match = max(similarity, partial_similarity)
+
+    return best_match >= threshold
 
 
 def get_current_date() -> Dict[str, Any]:
@@ -199,10 +233,11 @@ def create_reservation(
 def get_reservations(date: str = None, name: str = None) -> List[Dict[str, Any]]:
     """
     Get existing reservations, optionally filtered by date or name.
+    Uses FUZZY MATCHING for names to handle speech recognition errors.
 
     Args:
         date: Filter by date (YYYY-MM-DD format)
-        name: Filter by customer name
+        name: Filter by customer name (supports fuzzy matching)
 
     Returns:
         List of reservation dictionaries
@@ -211,12 +246,22 @@ def get_reservations(date: str = None, name: str = None) -> List[Dict[str, Any]]
     try:
         query = db.query(Reservation).filter(Reservation.status == 'confirmed')
 
+        # Filter by date if provided
         if date:
             query = query.filter(Reservation.date == date)
-        if name:
-            query = query.filter(Reservation.name.ilike(f"%{name}%"))
 
         reservations = query.all()
+
+        # If name provided, do fuzzy matching
+        if name:
+            matched_reservations = []
+            for res in reservations:
+                # Try fuzzy matching with 75% threshold
+                if fuzzy_match_name(name, res.name, threshold=75):
+                    matched_reservations.append(res)
+
+            return [r.to_dict() for r in matched_reservations]
+
         return [r.to_dict() for r in reservations]
 
     finally:
@@ -225,11 +270,12 @@ def get_reservations(date: str = None, name: str = None) -> List[Dict[str, Any]]
 
 def cancel_reservation(reservation_id: int = None, name: str = None, date: str = None) -> Dict[str, Any]:
     """
-    Cancel a reservation.
+    Cancel a reservation (frees up the assigned table).
+    Uses FUZZY MATCHING for names to handle speech recognition errors.
 
     Args:
         reservation_id: Specific reservation ID (if known)
-        name: Customer name (to find reservation)
+        name: Customer name (supports fuzzy matching)
         date: Date of reservation (to narrow search)
 
     Returns:
@@ -238,21 +284,43 @@ def cancel_reservation(reservation_id: int = None, name: str = None, date: str =
     db = get_db()
     try:
         if reservation_id:
+            # Direct ID lookup
             reservation = db.query(Reservation).filter(
                 Reservation.id == reservation_id
             ).first()
-        elif name and date:
-            reservation = db.query(Reservation).filter(
-                Reservation.name.ilike(f"%{name}%"),
-                Reservation.date == date,
-                Reservation.status == 'confirmed'
-            ).first()
         elif name:
-            # Find most recent reservation for this name
-            reservation = db.query(Reservation).filter(
-                Reservation.name.ilike(f"%{name}%"),
+            # Fuzzy name lookup
+            query = db.query(Reservation).filter(
                 Reservation.status == 'confirmed'
-            ).order_by(Reservation.created_at.desc()).first()
+            )
+
+            # Filter by date if provided
+            if date:
+                query = query.filter(Reservation.date == date)
+
+            # Get all candidates and fuzzy match
+            candidates = query.all()
+
+            # Find best fuzzy match
+            best_match = None
+            best_score = 0
+
+            for res in candidates:
+                # Clean names for comparison
+                clean_search = name.lower().replace(".", "").replace(" ", "")
+                clean_db = res.name.lower().replace(".", "").replace(" ", "")
+
+                # Calculate similarity
+                similarity = max(
+                    fuzz.ratio(clean_search, clean_db),
+                    fuzz.partial_ratio(clean_search, clean_db)
+                )
+
+                if similarity > best_score and similarity >= 75:
+                    best_score = similarity
+                    best_match = res
+
+            reservation = best_match
         else:
             return {
                 "success": False,
@@ -262,7 +330,7 @@ def cancel_reservation(reservation_id: int = None, name: str = None, date: str =
         if not reservation:
             return {
                 "success": False,
-                "error": "No reservation found"
+                "error": f"No reservation found matching '{name}'"
             }
 
         # Get table info before canceling (for response message)
