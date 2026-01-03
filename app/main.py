@@ -4,6 +4,7 @@ Full production version with Claude AI, database, and tool calling
 """
 
 from fastapi import FastAPI, Request, Response
+from fastapi.staticfiles import StaticFiles
 import os
 import json
 from datetime import datetime, timedelta
@@ -23,6 +24,14 @@ init_db()
 
 # Create FastAPI app
 app = FastAPI(title="Phone Agent API", version="3.0.0")
+
+# Mount static files directory for serving audio files
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+if not os.path.exists(static_dir):
+    os.makedirs(static_dir)
+    os.makedirs(os.path.join(static_dir, "sounds"))
+
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # In-memory conversation storage
 conversations = {}
@@ -89,7 +98,6 @@ async def handle_voice_call(request: Request):
         "tool_results": []
     }
 
-    # Greet and gather speech input
     twiml_response = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Gather input="speech" action="/process-speech" method="POST" timeout="3" speechTimeout="auto">
@@ -216,10 +224,18 @@ async def process_speech(request: Request):
     }
 
     # Continue gathering or end call
+    # The typing sound plays after Claude speaks, before listening again
+    # Using our custom keyboard typing sound
+
+    # Get the base URL for the request to construct full static file URL
+    base_url = str(request.base_url).rstrip('/')
+    typing_sound_url = f"{base_url}/static/sounds/writing-on-a-laptop-keyboard.wav"
+
     twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
+    <Say voice="Polly.Joanna">{assistant_text}</Say>
     <Gather input="speech" action="/process-speech" method="POST" timeout="3" speechTimeout="auto">
-        <Say voice="Polly.Joanna">{assistant_text}</Say>
+        <Play>{typing_sound_url}</Play>
     </Gather>
     <Say voice="Polly.Joanna">Thank you for calling Luigi's! Goodbye!</Say>
 </Response>"""
