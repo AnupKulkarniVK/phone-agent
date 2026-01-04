@@ -17,6 +17,9 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from services.llm import llm_service
 from services.database import init_db, get_db
 from agent.tools.reservation_tools import TOOL_DEFINITIONS, TOOL_FUNCTIONS
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse
+from sqlalchemy import func
 
 load_dotenv()
 
@@ -25,6 +28,14 @@ init_db()
 
 # Create FastAPI app
 app = FastAPI(title="Phone Agent API", version="3.0.0")
+
+# Setup templates for dashboard
+templates_dir = os.path.join(os.path.dirname(__file__), "templates")
+if not os.path.exists(templates_dir):
+    os.makedirs(templates_dir)
+
+templates = Jinja2Templates(directory=templates_dir)
+
 
 # Mount static files directory for serving audio files
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -433,6 +444,174 @@ async def list_reservations():
     """View all reservations (for debugging)"""
     from agent.tools.reservation_tools import get_reservations
     return {"reservations": get_reservations()}
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_home(request: Request):
+    """Dashboard overview page"""
+    from services.database import CallMetrics, CallQuality
+
+    db = get_db()
+    try:
+        # Get summary stats
+        total_calls = db.query(CallMetrics).count()
+
+        # Calls today
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        calls_today = db.query(CallMetrics).filter(CallMetrics.created_at >= today_start).count()
+
+        # Booking rate
+        bookings_completed = db.query(CallMetrics).filter(CallMetrics.booking_completed == True).count()
+        booking_rate = (bookings_completed / total_calls * 100) if total_calls > 0 else 0
+
+        # Average quality score
+        avg_quality = db.query(func.avg(CallQuality.overall_score)).scalar() or 0
+
+        # Quality distribution
+        quality_tiers = db.query(
+            CallQuality.quality_tier,
+            func.count(CallQuality.quality_tier)
+        ).group_by(CallQuality.quality_tier).all()
+
+        tier_counts = {tier: count for tier, count in quality_tiers}
+
+        # Recent calls
+        recent_calls = db.query(CallMetrics).order_by(
+            CallMetrics.created_at.desc()
+        ).limit(10).all()
+
+        return templates.TemplateResponse("dashboard_home.html", {
+            "request": request,
+            "total_calls": total_calls,
+            "calls_today": calls_today,
+            "booking_rate": round(booking_rate, 1),
+            "avg_quality": round(avg_quality, 1),
+            "tier_counts": tier_counts,
+            "recent_calls": recent_calls
+        })
+    finally:
+        db.close()
+
+
+@app.get("/dashboard/quality", response_class=HTMLResponse)
+async def dashboard_quality(request: Request):
+    """Quality analysis deep dive"""
+    from services.database import CallMetrics, CallQuality
+
+    db = get_db()
+    try:
+        # Get all calls with quality scores
+        calls_with_quality = db.query(CallMetrics).join(CallQuality).order_by(
+            CallMetrics.created_at.desc()
+        ).limit(100).all()
+
+        # Calculate average scores per dimension
+        avg_scores = db.query(
+            func.avg(CallQuality.efficiency_score).label('efficiency'),
+            func.avg(CallQuality.accuracy_score).label('accuracy'),
+            func.avg(CallQuality.helpfulness_score).label('helpfulness'),
+            func.avg(CallQuality.naturalness_score).label('naturalness'),
+            func.avg(CallQuality.professionalism_score).label('professionalism')
+        ).first()
+
+        return templates.TemplateResponse("dashboard_quality.html", {
+            "request": request,
+            "calls": calls_with_quality,
+            "avg_efficiency": round(avg_scores.efficiency or 0, 1),
+            "avg_accuracy": round(avg_scores.accuracy or 0, 1),
+            "avg_helpfulness": round(avg_scores.helpfulness or 0, 1),
+            "avg_naturalness": round(avg_scores.naturalness or 0, 1),
+            "avg_professionalism": round(avg_scores.professionalism or 0, 1)
+        })
+    finally:
+        db.close()
+
+
+@app.get("/dashboard/calls/{call_sid}", response_class=HTMLResponse)
+async def dashboard_call_detail(request: Request, call_sid: str):
+    """Detailed view of a single call"""
+    from services.database import CallMetrics, ConversationTurn
+
+    db = get_db()
+    try:
+        # Get call metrics
+        call = db.query(CallMetrics).filter(CallMetrics.call_sid == call_sid).first()
+
+        if not call:
+            return HTMLResponse(content=f"<h1>Call {call_sid} not found</h1>", status_code=404)
+
+        # Get conversation turns
+        turns = db.query(ConversationTurn).filter(
+            ConversationTurn.call_sid == call_sid
+        ).order_by(ConversationTurn.turn_number).all()
+
+        return templates.TemplateResponse("dashboard_call_detail.html", {
+            "request": request,
+            "call": call,
+            "turns": turns
+        })
+    finally:
+        db.close()
+
+
+@app.get("/dashboard/api/metrics")
+async def api_metrics():
+    """JSON API for dashboard charts"""
+    from services.database import CallMetrics
+
+    db = get_db()
+    try:
+        # Last 7 days of calls
+        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+
+        calls = db.query(CallMetrics).filter(
+            CallMetrics.created_at >= seven_days_ago
+        ).order_by(CallMetrics.created_at).all()
+
+        # Group by day
+        daily_stats = {}
+        for call in calls:
+            day = call.created_at.strftime("%Y-%m-%d")
+            if day not in daily_stats:
+                daily_stats[day] = {
+                    "calls": 0,
+                    "bookings": 0,
+                    "total_quality": 0,
+                    "quality_count": 0
+                }
+
+            daily_stats[day]["calls"] += 1
+            if call.booking_completed:
+                daily_stats[day]["bookings"] += 1
+
+            if call.quality:
+                daily_stats[day]["total_quality"] += call.quality.overall_score
+                daily_stats[day]["quality_count"] += 1
+
+        # Format for Chart.js
+        labels = []
+        calls_data = []
+        booking_rate_data = []
+        quality_data = []
+
+        for day in sorted(daily_stats.keys()):
+            stats = daily_stats[day]
+            labels.append(day)
+            calls_data.append(stats["calls"])
+
+            booking_rate = (stats["bookings"] / stats["calls"] * 100) if stats["calls"] > 0 else 0
+            booking_rate_data.append(round(booking_rate, 1))
+
+            avg_quality = (stats["total_quality"] / stats["quality_count"]) if stats["quality_count"] > 0 else 0
+            quality_data.append(round(avg_quality, 1))
+
+        return {
+            "labels": labels,
+            "calls": calls_data,
+            "booking_rate": booking_rate_data,
+            "quality": quality_data
+        }
+    finally:
+        db.close()
 
 if __name__ == "__main__":
     import uvicorn
