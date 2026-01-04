@@ -2,7 +2,7 @@ services:
   - type: web
     name: phone-agent
     env: python
-    buildCommand: pip install -r requirements.txt && python migrate_db.py
+    buildCommand: pip install -r requirements.txt && python migrate_db.py && python generate_synthetic_data.py < /dev/null
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
