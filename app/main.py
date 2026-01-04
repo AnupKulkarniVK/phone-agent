@@ -2,11 +2,12 @@
 Main FastAPI application for phone agent
 Full production version with Claude AI, database, and tool calling
 """
-
+from app.services.metrics_tracker import start_tracking_call, get_tracker, end_tracking_call
 from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 import os
 import json
+import time
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -91,6 +92,8 @@ async def handle_voice_call(request: Request):
     """Initial call handler - greet and start conversation"""
     form_data = await request.form()
     call_sid = form_data.get("CallSid", "unknown")
+    from_number = form_data.get("From")
+    start_tracking_call(call_sid, from_number)
 
     # Initialize conversation for this call
     conversations[call_sid] = {
@@ -98,13 +101,18 @@ async def handle_voice_call(request: Request):
         "tool_results": []
     }
 
-    twiml_response = """<?xml version="1.0" encoding="UTF-8"?>
+    # Initial greeting
+    greeting = "Hello! Welcome to Luigi's Italian Restaurant. This is your AI assistant. How can I help you today?"
+
+    # ✅ TRACK AGENT'S FIRST TURN
+    tracker = get_tracker(call_sid)
+    if tracker:
+        tracker.add_agent_turn(greeting)
+
+    twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Gather input="speech" action="/process-speech" method="POST" timeout="3" speechTimeout="auto">
-        <Say voice="Polly.Joanna">
-            Hello! Welcome to Luigi's Italian Restaurant. 
-            This is your AI assistant. How can I help you today?
-        </Say>
+        <Say voice="Polly.Joanna">{greeting}</Say>
     </Gather>
     <Say voice="Polly.Joanna">I didn't hear anything. Goodbye!</Say>
 </Response>"""
@@ -128,6 +136,11 @@ async def process_speech(request: Request):
 
     print(f"\n[{call_sid}] User said: {user_speech}")
 
+    # ✅ TRACK USER TURN
+    tracker = get_tracker(call_sid)
+    if tracker:
+        tracker.add_user_turn(user_speech)
+
     # Get conversation history
     conv = conversations.get(call_sid, {"messages": [], "tool_results": []})
     messages = conv["messages"]
@@ -138,12 +151,27 @@ async def process_speech(request: Request):
         "content": user_speech
     })
 
+    # ✅ TRACK LATENCY: Start timer before Claude API call
+    start_time = time.time()
+
     # Call Claude with tools - this is the INDUSTRY PATTERN
-    response = llm_service.get_response_with_tools(
-        user_speech,
-        conversation_history=messages,
-        tools=TOOL_DEFINITIONS
-    )
+    try:
+        response = llm_service.get_response_with_tools(
+            user_speech,
+            conversation_history=messages,
+            tools=TOOL_DEFINITIONS
+        )
+
+        # ✅ TRACK LATENCY: Calculate time taken
+        latency_ms = (time.time() - start_time) * 1000
+        if tracker:
+            tracker.total_latency_ms += latency_ms
+
+    except Exception as e:
+        # ✅ TRACK API ERROR
+        if tracker:
+            tracker.add_api_error()
+        raise
 
     print(f"[{call_sid}] Claude stop_reason: {response['stop_reason']}")
 
@@ -164,6 +192,10 @@ async def process_speech(request: Request):
 
             print(f"[{call_sid}] Claude calling tool: {tool_name} with {tool_input}")
 
+            # ✅ TRACK TOOL CALL
+            if tracker:
+                tracker.add_tool_call(tool_name)
+
             # Execute the actual function
             try:
                 # Get the function
@@ -177,6 +209,11 @@ async def process_speech(request: Request):
 
                 result = func(**tool_input)
                 print(f"[{call_sid}] Tool result: {result}")
+
+                # ✅ TRACK BOOKING COMPLETION
+                if tool_name == "create_reservation" and result.get("success"):
+                    if tracker:
+                        tracker.set_booking_completed(True)
 
                 # Add tool result to conversation
                 messages.append({
@@ -193,6 +230,9 @@ async def process_speech(request: Request):
                     }]
                 })
 
+                # ✅ TRACK LATENCY: Start timer for followup
+                followup_start = time.time()
+
                 # Get Claude's response to the tool result
                 followup = llm_service.get_response_with_tools(
                     "",  # No new user message
@@ -200,15 +240,25 @@ async def process_speech(request: Request):
                     tools=TOOL_DEFINITIONS
                 )
 
+                # ✅ TRACK LATENCY: Add followup latency
+                followup_latency = (time.time() - followup_start) * 1000
+                if tracker:
+                    tracker.total_latency_ms += followup_latency
+
                 # Extract text from followup
                 for fb_block in followup["content"]:
                     if fb_block["type"] == "text":
                         assistant_text = fb_block["text"]
                         print(f"[{call_sid}] Claude (after tool): {assistant_text}")
+
                     elif fb_block["type"] == "tool_use":
                         # Claude wants to call ANOTHER tool (chaining)
                         # This happens when get_current_date → check_availability
                         print(f"[{call_sid}] Claude chaining to another tool: {fb_block['name']}")
+
+                        # ✅ TRACK CHAINED TOOL CALL
+                        if tracker:
+                            tracker.add_tool_call(fb_block["name"])
 
                         # Execute the chained tool
                         chained_func = TOOL_FUNCTIONS[fb_block["name"]]
@@ -220,6 +270,11 @@ async def process_speech(request: Request):
 
                         chained_result = chained_func(**chained_input)
                         print(f"[{call_sid}] Chained tool result: {chained_result}")
+
+                        # ✅ TRACK CHAINED BOOKING
+                        if fb_block["name"] == "create_reservation" and chained_result.get("success"):
+                            if tracker:
+                                tracker.set_booking_completed(True)
 
                         # Add chained tool use to conversation
                         messages.append({
@@ -236,12 +291,20 @@ async def process_speech(request: Request):
                             }]
                         })
 
+                        # ✅ TRACK LATENCY: Start timer for final response
+                        final_start = time.time()
+
                         # Get Claude's final response after chained tool
                         final_response = llm_service.get_response_with_tools(
                             "",
                             conversation_history=messages,
                             tools=TOOL_DEFINITIONS
                         )
+
+                        # ✅ TRACK LATENCY: Add final latency
+                        final_latency = (time.time() - final_start) * 1000
+                        if tracker:
+                            tracker.total_latency_ms += final_latency
 
                         # Extract final text
                         for final_block in final_response["content"]:
@@ -251,7 +314,15 @@ async def process_speech(request: Request):
 
             except Exception as e:
                 print(f"[{call_sid}] Error executing tool: {e}")
+                # ✅ TRACK ERROR
+                if tracker:
+                    tracker.add_api_error()
                 assistant_text = "I'm sorry, I had trouble with that. Could you try again?"
+
+    # ✅ TRACK AGENT RESPONSE
+    if assistant_text:
+        if tracker:
+            tracker.add_agent_turn(assistant_text)
 
     # Add assistant response to conversation
     if assistant_text and response["stop_reason"] != "tool_use":
@@ -286,35 +357,82 @@ async def process_speech(request: Request):
     return Response(content=twiml_response, media_type="application/xml")
 
 
+@app.post("/call-ended")
+async def call_ended(request: Request):
+    """
+    Twilio webhook called when call completes.
+    This is where we finalize and save all metrics.
+    """
+    form_data = await request.form()
+    call_sid = form_data.get("CallSid", "unknown")
+    call_status = form_data.get("CallStatus", "unknown")
+
+    print(f"📞 Call ended: {call_sid} - Status: {call_status}")
+
+    # ✅ END TRACKING AND SAVE METRICS
+    end_tracking_call(call_sid)
+
+    # Clean up conversation memory
+    if call_sid in conversations:
+        del conversations[call_sid]
+
+    return {"status": "ok", "call_sid": call_sid}
+
+
 @app.get("/health")
 async def health_check():
     """Health check with database status"""
     db = get_db()
     try:
-        from services.database import Reservation
+        from services.database import Reservation, CallMetrics
         reservation_count = db.query(Reservation).count()
+        metrics_count = db.query(CallMetrics).count()
         db_status = "healthy"
     except Exception as e:
         reservation_count = 0
+        metrics_count = 0
         db_status = f"error: {str(e)}"
     finally:
         db.close()
 
     return {
         "status": "healthy",
-        "features": ["speech_recognition", "claude_ai", "function_calling", "database"],
+        "features": ["speech_recognition", "claude_ai", "function_calling", "database", "quality_metrics"],
         "active_conversations": len(conversations),
         "total_reservations": reservation_count,
+        "total_calls_tracked": metrics_count,
         "database": db_status
     }
 
+@app.get("/metrics")
+async def list_metrics():
+    """View all call metrics (for debugging)"""
+    db = get_db()
+    try:
+        from services.database import CallMetrics, CallQuality
+
+        # Get last 10 calls with quality scores
+        calls = db.query(CallMetrics).order_by(CallMetrics.created_at.desc()).limit(10).all()
+
+        results = []
+        for call in calls:
+            call_data = call.to_dict()
+            if call.quality:
+                call_data["quality"] = call.quality.to_dict()
+            results.append(call_data)
+
+        return {
+            "total_calls": db.query(CallMetrics).count(),
+            "recent_calls": results
+        }
+    finally:
+        db.close()
 
 @app.get("/reservations")
 async def list_reservations():
     """View all reservations (for debugging)"""
     from agent.tools.reservation_tools import get_reservations
     return {"reservations": get_reservations()}
-
 
 if __name__ == "__main__":
     import uvicorn
