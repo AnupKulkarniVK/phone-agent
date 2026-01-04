@@ -42,9 +42,10 @@ def calculate_efficiency_score(metrics: CallMetrics) -> float:
     clarification_penalty = metrics.clarifications_needed * 10
     score -= clarification_penalty
 
-    # Penalty for high latency (ideal: under 3 seconds total)
-    if metrics.total_latency_ms and metrics.total_latency_ms > 3000:
-        latency_penalty = (metrics.total_latency_ms - 3000) / 100
+    # FIXED: Penalty for high latency (ideal: under 5 seconds total)
+    # Changed from /100 to /1000 to make penalty less harsh
+    if metrics.total_latency_ms and metrics.total_latency_ms > 5000:
+        latency_penalty = (metrics.total_latency_ms - 5000) / 1000
         score -= latency_penalty
 
     return max(0.0, min(100.0, score))
