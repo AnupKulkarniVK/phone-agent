@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+
+{% block title %}Overview{% endblock %}
+
+{% block content %}
+<!-- Stats Cards -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-label">Total Calls</div>
+        <div class="stat-value">{{ total_calls }}</div>
+        <div class="stat-change">{{ calls_today }} today</div>
+    </div>
+    
+    <div class="stat-card">
+        <div class="stat-label">Booking Rate</div>
+        <div class="stat-value">{{ booking_rate }}%</div>
+        <div class="stat-change">Conversion success rate</div>
+    </div>
+    
+    <div class="stat-card">
+        <div class="stat-label">Avg Quality</div>
+        <div class="stat-value">{{ avg_quality }}</div>
+        <div class="stat-change">Out of 100</div>
+    </div>
+    
+    <div class="stat-card">
+        <div class="stat-label">Uptime</div>
+        <div class="stat-value">99.9%</div>
+        <div class="stat-change">Last 7 days</div>
+    </div>
+</div>
+
+<!-- Quality Distribution -->
+<div class="card" style="margin-bottom: 24px; animation-delay: 0.5s;">
+    <h2>📊 Quality Distribution</h2>
+    <div class="chart-container">
+        <canvas id="qualityChart"></canvas>
+    </div>
+</div>
+
+<!-- Trend Chart -->
+<div class="card" style="margin-bottom: 24px; animation-delay: 0.6s;">
+    <h2>📈 7-Day Trend</h2>
+    <div class="chart-container">
+        <canvas id="trendChart"></canvas>
+    </div>
+</div>
+
+<!-- Recent Calls Table -->
+<div class="card" style="animation-delay: 0.7s;">
+    <h2>📞 Recent Calls</h2>
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Duration</th>
+                    <th>Turns</th>
+                    <th>Booking</th>
+                    <th>Quality</th>
+                    <th>Tier</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for call in recent_calls %}
+                <tr onclick="window.location='/dashboard/calls/{{ call.call_sid }}'" style="cursor: pointer;">
+                    <td>{{ call.created_at.strftime('%m/%d %I:%M %p') }}</td>
+                    <td>{{ "%.1f"|format(call.total_duration_sec) }}s</td>
+                    <td>{{ call.user_turns }}</td>
+                    <td>{{ '✅' if call.booking_completed else '❌' }}</td>
+                    <td>
+                        {% if call.quality %}
+                            {{ "%.1f"|format(call.quality.overall_score) }}/100
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if call.quality %}
+                            <span class="badge badge-{{ call.quality.quality_tier.lower() }}">
+                                {{ call.quality.quality_tier }}
+                            </span>
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Quality Distribution Pie Chart
+const qualityCtx = document.getElementById('qualityChart').getContext('2d');
+const qualityData = {
+    labels: ['Excellent', 'Great', 'Good', 'Fair', 'Poor'],
+    datasets: [{
+        data: [
+            {{ tier_counts.get('Excellent', 0) }},
+            {{ tier_counts.get('Great', 0) }},
+            {{ tier_counts.get('Good', 0) }},
+            {{ tier_counts.get('Fair', 0) }},
+            {{ tier_counts.get('Poor', 0) }}
+        ],
+        backgroundColor: [
+            '#48bb78',  // Green for Excellent
+            '#4299e1',  // Blue for Great
+            '#ed8936',  // Orange for Good
+            '#f56565',  // Red for Fair
+            '#e53e3e'   // Dark red for Poor
+        ],
+        borderWidth: 0
+    }]
+};
+
+const qualityChart = new Chart(qualityCtx, {
+    type: 'doughnut',
+    data: qualityData,
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                position: 'right',
+                labels: {
+                    font: {
+                        family: 'Inter',
+                        size: 12
+                    },
+                    padding: 15
+                }
+            }
+        },
+        animation: {
+            animateRotate: true,
+            animateScale: true,
+            duration: 1500,
+            easing: 'easeInOutQuart'
+        }
+    }
+});
+
+// Fetch 7-day trend data
+fetch('/dashboard/api/metrics')
+    .then(response => response.json())
+    .then(data => {
+        const trendCtx = document.getElementById('trendChart').getContext('2d');
+        
+        const trendChart = new Chart(trendCtx, {
+            type: 'line',
+            data: {
+                labels: data.labels,
+                datasets: [
+                    {
+                        label: 'Quality Score',
+                        data: data.quality,
+                        borderColor: '#667eea',
+                        backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                        tension: 0.4,
+                        fill: true,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Booking Rate %',
+                        data: data.booking_rate,
+                        borderColor: '#48bb78',
+                        backgroundColor: 'rgba(72, 187, 120, 0.1)',
+                        tension: 0.4,
+                        fill: true,
+                        yAxisID: 'y'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
+                plugins: {
+                    legend: {
+                        labels: {
+                            font: {
+                                family: 'Inter',
+                                size: 12
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        grid: {
+                            color: 'rgba(0, 0, 0, 0.05)'
+                        },
+                        ticks: {
+                            font: {
+                                family: 'Inter'
+                            }
+                        }
+                    },
+                    x: {
+                        grid: {
+                            display: false
+                        },
+                        ticks: {
+                            font: {
+                                family: 'Inter'
+                            }
+                        }
+                    }
+                },
+                animation: {
+                    duration: 2000,
+                    easing: 'easeInOutQuart'
+                }
+            }
+        });
+    });
+</script>
+{% endblock %}

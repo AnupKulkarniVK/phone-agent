@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}Call Details{% endblock %}
+
+{% block content %}
+<!-- Call Overview -->
+<div class="card" style="margin-bottom: 24px;">
+    <h2>📞 Call: {{ call.call_sid }}</h2>
+    
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-top: 20px;">
+        <div>
+            <div style="color: #718096; font-size: 12px; margin-bottom: 4px;">Duration</div>
+            <div style="font-size: 20px; font-weight: 600;">{{ "%.1f"|format(call.total_duration_sec) }}s</div>
+        </div>
+        <div>
+            <div style="color: #718096; font-size: 12px; margin-bottom: 4px;">Turns</div>
+            <div style="font-size: 20px; font-weight: 600;">{{ call.user_turns }} / {{ call.agent_turns }}</div>
+        </div>
+        <div>
+            <div style="color: #718096; font-size: 12px; margin-bottom: 4px;">Booking</div>
+            <div style="font-size: 20px; font-weight: 600;">{{ '✅ Yes' if call.booking_completed else '❌ No' }}</div>
+        </div>
+        <div>
+            <div style="color: #718096; font-size: 12px; margin-bottom: 4px;">Quality Tier</div>
+            <div>
+                {% if call.quality %}
+                <span class="badge badge-{{ call.quality.quality_tier.lower() }}" style="font-size: 14px; padding: 6px 14px;">
+                    {{ call.quality.quality_tier }}
+                </span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quality Scores -->
+{% if call.quality %}
+<div class="card" style="margin-bottom: 24px; animation-delay: 0.2s;">
+    <h2>🎯 Quality Scores</h2>
+    
+    <div style="margin-top: 20px;">
+        <!-- Efficiency -->
+        <div style="margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                <span style="font-weight: 500;">Efficiency</span>
+                <span style="font-weight: 600; color: #667eea;">{{ "%.1f"|format(call.quality.efficiency_score) }}/100</span>
+            </div>
+            <div style="background: #e2e8f0; height: 8px; border-radius: 4px; overflow: hidden;">
+                <div style="background: linear-gradient(90deg, #667eea, #764ba2); height: 100%; width: {{ call.quality.efficiency_score }}%; transition: width 1s ease-out;"></div>
+            </div>
+        </div>
+        
+        <!-- Accuracy -->
+        <div style="margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                <span style="font-weight: 500;">Accuracy</span>
+                <span style="font-weight: 600; color: #48bb78;">{{ "%.1f"|format(call.quality.accuracy_score) }}/100</span>
+            </div>
+            <div style="background: #e2e8f0; height: 8px; border-radius: 4px; overflow: hidden;">
+                <div style="background: #48bb78; height: 100%; width: {{ call.quality.accuracy_score }}%; transition: width 1s ease-out; transition-delay: 0.2s;"></div>
+            </div>
+        </div>
+        
+        <!-- Helpfulness -->
+        <div style="margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                <span style="font-weight: 500;">Helpfulness</span>
+                <span style="font-weight: 600; color: #ed8936;">{{ "%.1f"|format(call.quality.helpfulness_score) }}/100</span>
+            </div>
+            <div style="background: #e2e8f0; height: 8px; border-radius: 4px; overflow: hidden;">
+                <div style="background: #ed8936; height: 100%; width: {{ call.quality.helpfulness_score }}%; transition: width 1s ease-out; transition-delay: 0.4s;"></div>
+            </div>
+        </div>
+        
+        <!-- Naturalness -->
+        <div style="margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                <span style="font-weight: 500;">Naturalness</span>
+                <span style="font-weight: 600; color: #4299e1;">{{ "%.1f"|format(call.quality.naturalness_score) }}/100</span>
+            </div>
+            <div style="background: #e2e8f0; height: 8px; border-radius: 4px; overflow: hidden;">
+                <div style="background: #4299e1; height: 100%; width: {{ call.quality.naturalness_score }}%; transition: width 1s ease-out; transition-delay: 0.6s;"></div>
+            </div>
+        </div>
+        
+        <!-- Professionalism -->
+        <div style="margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                <span style="font-weight: 500;">Professionalism</span>
+                <span style="font-weight: 600; color: #9f7aea;">{{ "%.1f"|format(call.quality.professionalism_score) }}/100</span>
+            </div>
+            <div style="background: #e2e8f0; height: 8px; border-radius: 4px; overflow: hidden;">
+                <div style="background: #9f7aea; height: 100%; width: {{ call.quality.professionalism_score }}%; transition: width 1s ease-out; transition-delay: 0.8s;"></div>
+            </div>
+        </div>
+        
+        <!-- Overall -->
+        <div style="margin-top: 24px; padding-top: 16px; border-top: 2px solid #e2e8f0;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-weight: 600; font-size: 16px;">Overall Score</span>
+                <span style="font-weight: 700; font-size: 24px; color: #667eea;">{{ "%.1f"|format(call.quality.overall_score) }}/100</span>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Conversation Transcript -->
+<div class="card" style="animation-delay: 0.3s;">
+    <h2>💬 Conversation Transcript</h2>
+    
+    <div style="margin-top: 20px;">
+        {% for turn in turns %}
+        <div style="margin-bottom: 16px; padding: 12px; border-radius: 8px; {% if turn.speaker == 'user' %}background: #f7fafc; border-left: 4px solid #667eea;{% else %}background: #faf5ff; border-left: 4px solid #9f7aea;{% endif %}">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                <span style="font-weight: 600; color: {% if turn.speaker == 'user' %}#667eea{% else %}#9f7aea{% endif %}; text-transform: capitalize;">
+                    {% if turn.speaker == 'user' %}👤 User{% else %}🤖 Agent{% endif %}
+                </span>
+                <span style="font-size: 12px; color: #718096;">
+                    Turn {{ turn.turn_number }}
+                </span>
+            </div>
+            <div style="color: #2d3748; line-height: 1.5;">
+                {{ turn.transcript }}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div style="margin-top: 20px;">
+    <a href="/dashboard" style="padding: 12px 24px; background: #667eea; color: white; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: 500;">
+        ← Back to Dashboard
+    </a>
+</div>
+{% endblock %}

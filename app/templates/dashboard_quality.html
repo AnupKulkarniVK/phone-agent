@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+
+{% block title %}Quality Analysis{% endblock %}
+
+{% block content %}
+<!-- Dimension Breakdown -->
+<div class="card" style="margin-bottom: 24px;">
+    <h2>🎯 Average Dimension Scores (Last 100 Calls)</h2>
+    <div class="chart-container" style="height: 400px;">
+        <canvas id="radarChart"></canvas>
+    </div>
+</div>
+
+<!-- Dimension Bars -->
+<div class="card" style="margin-bottom: 24px; animation-delay: 0.3s;">
+    <h2>📊 Dimension Breakdown</h2>
+    <div class="chart-container">
+        <canvas id="barChart"></canvas>
+    </div>
+</div>
+
+<!-- Recent Calls with Quality -->
+<div class="card" style="animation-delay: 0.4s;">
+    <h2>📞 Call Quality Details</h2>
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Call SID</th>
+                    <th>Duration</th>
+                    <th>Efficiency</th>
+                    <th>Accuracy</th>
+                    <th>Helpfulness</th>
+                    <th>Naturalness</th>
+                    <th>Professional</th>
+                    <th>Overall</th>
+                    <th>Tier</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for call in calls %}
+                <tr onclick="window.location='/dashboard/calls/{{ call.call_sid }}'" style="cursor: pointer;">
+                    <td style="font-family: monospace; font-size: 11px;">{{ call.call_sid[:8] }}...</td>
+                    <td>{{ "%.0f"|format(call.total_duration_sec) }}s</td>
+                    <td>{{ "%.0f"|format(call.quality.efficiency_score) }}</td>
+                    <td>{{ "%.0f"|format(call.quality.accuracy_score) }}</td>
+                    <td>{{ "%.0f"|format(call.quality.helpfulness_score) }}</td>
+                    <td>{{ "%.0f"|format(call.quality.naturalness_score) }}</td>
+                    <td>{{ "%.0f"|format(call.quality.professionalism_score) }}</td>
+                    <td><strong>{{ "%.1f"|format(call.quality.overall_score) }}</strong></td>
+                    <td>
+                        <span class="badge badge-{{ call.quality.quality_tier.lower() }}">
+                            {{ call.quality.quality_tier }}
+                        </span>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Radar Chart - 5 Dimensions
+const radarCtx = document.getElementById('radarChart').getContext('2d');
+const radarChart = new Chart(radarCtx, {
+    type: 'radar',
+    data: {
+        labels: ['Efficiency', 'Accuracy', 'Helpfulness', 'Naturalness', 'Professionalism'],
+        datasets: [{
+            label: 'Average Score',
+            data: [
+                {{ avg_efficiency }},
+                {{ avg_accuracy }},
+                {{ avg_helpfulness }},
+                {{ avg_naturalness }},
+                {{ avg_professionalism }}
+            ],
+            backgroundColor: 'rgba(102, 126, 234, 0.2)',
+            borderColor: '#667eea',
+            borderWidth: 3,
+            pointBackgroundColor: '#667eea',
+            pointBorderColor: '#fff',
+            pointBorderWidth: 2,
+            pointRadius: 6,
+            pointHoverRadius: 8
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+            r: {
+                beginAtZero: true,
+                max: 100,
+                ticks: {
+                    stepSize: 20,
+                    font: {
+                        family: 'Inter',
+                        size: 11
+                    }
+                },
+                pointLabels: {
+                    font: {
+                        family: 'Inter',
+                        size: 13,
+                        weight: '600'
+                    }
+                },
+                grid: {
+                    color: 'rgba(0, 0, 0, 0.1)'
+                }
+            }
+        },
+        plugins: {
+            legend: {
+                display: false
+            }
+        },
+        animation: {
+            duration: 2000,
+            easing: 'easeInOutQuart'
+        }
+    }
+});
+
+// Bar Chart - Horizontal
+const barCtx = document.getElementById('barChart').getContext('2d');
+const barChart = new Chart(barCtx, {
+    type: 'bar',
+    data: {
+        labels: ['Efficiency', 'Accuracy', 'Helpfulness', 'Naturalness', 'Professionalism'],
+        datasets: [{
+            label: 'Average Score',
+            data: [
+                {{ avg_efficiency }},
+                {{ avg_accuracy }},
+                {{ avg_helpfulness }},
+                {{ avg_naturalness }},
+                {{ avg_professionalism }}
+            ],
+            backgroundColor: [
+                'rgba(102, 126, 234, 0.8)',
+                'rgba(72, 187, 120, 0.8)',
+                'rgba(237, 137, 54, 0.8)',
+                'rgba(66, 153, 225, 0.8)',
+                'rgba(159, 122, 234, 0.8)'
+            ],
+            borderWidth: 0,
+            borderRadius: 8
+        }]
+    },
+    options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+            x: {
+                beginAtZero: true,
+                max: 100,
+                grid: {
+                    color: 'rgba(0, 0, 0, 0.05)'
+                },
+                ticks: {
+                    font: {
+                        family: 'Inter'
+                    }
+                }
+            },
+            y: {
+                grid: {
+                    display: false
+                },
+                ticks: {
+                    font: {
+                        family: 'Inter',
+                        size: 13
+                    }
+                }
+            }
+        },
+        plugins: {
+            legend: {
+                display: false
+            }
+        },
+        animation: {
+            duration: 1500,
+            easing: 'easeInOutQuart',
+            delay: (context) => {
+                return context.dataIndex * 100;
+            }
+        }
+    }
+});
+</script>
+{% endblock %}
