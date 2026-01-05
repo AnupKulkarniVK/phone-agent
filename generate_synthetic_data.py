@@ -19,6 +19,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.services.database import get_db, CallMetrics, CallQuality, ConversationTurn
 
+num_calls = os.getenv("SYNTHETIC_CALLS")
 
 # ==================== SYNTHETIC DATA TEMPLATES ====================
 
