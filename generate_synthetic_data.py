@@ -19,7 +19,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.services.database import get_db, CallMetrics, CallQuality, ConversationTurn
 
-num_calls = os.getenv("SYNTHETIC_CALLS")
 
 # ==================== SYNTHETIC DATA TEMPLATES ====================
 
@@ -387,11 +386,9 @@ if __name__ == "__main__":
     print("=" * 60)
     print("")
 
-    # Ask user how many calls
-    try:
-        num_calls = int(input("How many synthetic calls to generate? [20]: ") or "20")
-    except ValueError:
-        num_calls = 20
+    # Hardcoded to 30 calls for dashboard demo
+    num_calls = 30
+    print(f"Generating {num_calls} synthetic calls...")
 
     print("")
 
