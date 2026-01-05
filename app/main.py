@@ -20,7 +20,6 @@ from agent.tools.reservation_tools import TOOL_DEFINITIONS, TOOL_FUNCTIONS
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 from sqlalchemy import func
-from scipy import stats
 
 import math
 load_dotenv()
