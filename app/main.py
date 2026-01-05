@@ -21,8 +21,8 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 from sqlalchemy import func
 from scipy import stats
-import numpy as np
 
+import math
 load_dotenv()
 
 # Initialize database
@@ -615,6 +615,59 @@ async def api_metrics():
     finally:
         db.close()
 
+def calculate_t_statistic(sample1, sample2):
+    """
+    Calculate t-statistic between two samples.
+    """
+    n1 = len(sample1)
+    n2 = len(sample2)
+
+    if n1 < 2 or n2 < 2:
+        return None, None
+
+    # Calculate means
+    mean1 = sum(sample1) / n1
+    mean2 = sum(sample2) / n2
+
+    # Calculate variances
+    var1 = sum((x - mean1) ** 2 for x in sample1) / (n1 - 1)
+    var2 = sum((x - mean2) ** 2 for x in sample2) / (n2 - 1)
+
+    # Calculate pooled standard error
+    pooled_se = math.sqrt(var1 / n1 + var2 / n2)
+
+    if pooled_se == 0:
+        return None, None
+
+    # Calculate t-statistic
+    t_stat = (mean1 - mean2) / pooled_se
+
+    # Degrees of freedom (Welch-Satterthwaite equation)
+    df = ((var1 / n1 + var2 / n2) ** 2) / (
+            (var1 / n1) ** 2 / (n1 - 1) + (var2 / n2) ** 2 / (n2 - 1)
+    )
+
+    # Simplified p-value estimation
+    # For df > 30, use normal approximation
+    if df > 30:
+        # Using normal distribution approximation
+        # |t| > 1.96 → p < 0.05 (95% confidence)
+        # |t| > 2.58 → p < 0.01 (99% confidence)
+        abs_t = abs(t_stat)
+        if abs_t > 2.58:
+            p_value = 0.01
+        elif abs_t > 1.96:
+            p_value = 0.05
+        elif abs_t > 1.64:
+            p_value = 0.10
+        else:
+            p_value = 0.20
+    else:
+        # Conservative estimate for smaller samples
+        p_value = 0.10
+
+    return t_stat, p_value
+
 @app.get("/dashboard/ab-testing", response_class=HTMLResponse)
 async def dashboard_ab_testing(request: Request):
     """A/B testing analysis dashboard"""
@@ -666,19 +719,22 @@ async def dashboard_ab_testing(request: Request):
             booking_rate = (bookings / call_count * 100) if call_count > 0 else 0
 
             quality_scores = [c.quality.overall_score for c in calls if c.quality]
-            avg_quality = np.mean(quality_scores) if quality_scores else 0
+            avg_quality = sum(quality_scores) / len(quality_scores) if quality_scores else 0
 
             efficiency_scores = [c.quality.efficiency_score for c in calls if c.quality]
-            avg_efficiency = np.mean(efficiency_scores) if efficiency_scores else 0
+            avg_efficiency = sum(efficiency_scores) / len(efficiency_scores) if efficiency_scores else 0
 
             accuracy_scores = [c.quality.accuracy_score for c in calls if c.quality]
-            avg_accuracy = np.mean(accuracy_scores) if accuracy_scores else 0
+            avg_accuracy = sum(accuracy_scores) / len(accuracy_scores) if accuracy_scores else 0
 
             naturalness_scores = [c.quality.naturalness_score for c in calls if c.quality]
-            avg_naturalness = np.mean(naturalness_scores) if naturalness_scores else 0
+            avg_naturalness = sum(naturalness_scores) / len(naturalness_scores) if naturalness_scores else 0
 
             professionalism_scores = [c.quality.professionalism_score for c in calls if c.quality]
-            avg_professionalism = np.mean(professionalism_scores) if professionalism_scores else 0
+            avg_professionalism = sum(professionalism_scores) / len(professionalism_scores) if professionalism_scores else 0
+
+            helpfulness_scores = [c.quality.helpfulness_score for c in calls if c.quality]
+            avg_helpfulness = sum(helpfulness_scores) / len(helpfulness_scores) if helpfulness_scores else 100
 
             variant_stats.append({
                 "name": variant,
@@ -690,6 +746,7 @@ async def dashboard_ab_testing(request: Request):
                 "avg_accuracy": avg_accuracy,
                 "avg_naturalness": avg_naturalness,
                 "avg_professionalism": avg_professionalism,
+                "avg_helpfulness": avg_helpfulness,
                 "quality_scores": quality_scores,
                 "is_winner": False,
                 "is_significant": False
@@ -703,7 +760,7 @@ async def dashboard_ab_testing(request: Request):
         # Sort by quality score
         variant_stats.sort(key=lambda x: x["avg_quality"], reverse=True)
 
-        # Determine statistical significance (t-test between best and others)
+        # Determine statistical significance
         if len(variant_stats) >= 2:
             best_variant = variant_stats[0]
             best_scores = best_variant["quality_scores"]
@@ -713,10 +770,10 @@ async def dashboard_ab_testing(request: Request):
 
                 # Need at least 30 samples for reliable t-test
                 if len(best_scores) >= 30 and len(other_scores) >= 30:
-                    t_stat, p_value = stats.ttest_ind(best_scores, other_scores)
+                    t_stat, p_value = calculate_t_statistic(best_scores, other_scores)
 
                     # If p < 0.05, the difference is statistically significant
-                    if p_value < 0.05:
+                    if p_value and p_value < 0.05:
                         variant["is_significant"] = True
 
             # Mark winner
@@ -727,16 +784,14 @@ async def dashboard_ab_testing(request: Request):
         best_variant_name = variant_stats[0]["name"] if variant_stats else "None"
         best_score = variant_stats[0]["avg_quality"] if variant_stats else 0
 
-        # Prepare radar chart data (compare all variants)
+        # Prepare radar chart data
         colors = [
-            ('rgba(102, 126, 234, 0.2)', '#667eea'),  # Purple
-            ('rgba(72, 187, 120, 0.2)', '#48bb78'),   # Green
-            ('rgba(237, 137, 54, 0.2)', '#ed8936'),   # Orange
+            ('rgba(102, 126, 234, 0.2)', '#667eea'),
+            ('rgba(72, 187, 120, 0.2)', '#48bb78'),
+            ('rgba(237, 137, 54, 0.2)', '#ed8936'),
         ]
 
-        radar_chart_data = {
-            "datasets": []
-        }
+        radar_chart_data = {"datasets": []}
 
         for i, variant in enumerate(variant_stats):
             color = colors[i % len(colors)]
@@ -745,7 +800,7 @@ async def dashboard_ab_testing(request: Request):
                 "data": [
                     round(variant["avg_efficiency"], 1),
                     round(variant["avg_accuracy"], 1),
-                    round(variant.get("avg_helpfulness", 100), 1),
+                    round(variant["avg_helpfulness"], 1),
                     round(variant["avg_naturalness"], 1),
                     round(variant["avg_professionalism"], 1)
                 ],
@@ -753,14 +808,9 @@ async def dashboard_ab_testing(request: Request):
                 "borderColor": color[1]
             })
 
-        # Prepare time series data (quality over time by variant)
-        # Group by date for simplicity
-        time_series_data = {
-            "labels": [],
-            "datasets": []
-        }
+        # Prepare time series data
+        time_series_data = {"labels": [], "datasets": []}
 
-        # Get last 7 days
         from datetime import datetime, timedelta
         end_date = datetime.utcnow()
         start_date = end_date - timedelta(days=7)
@@ -784,10 +834,10 @@ async def dashboard_ab_testing(request: Request):
                              if day_start <= c.created_at <= day_end and c.quality]
 
                 if day_calls:
-                    avg_score = np.mean([c.quality.overall_score for c in day_calls])
+                    avg_score = sum(c.quality.overall_score for c in day_calls) / len(day_calls)
                     daily_scores.append(round(avg_score, 1))
                 else:
-                    daily_scores.append(None)  # No data for this day
+                    daily_scores.append(None)
 
                 current_date += timedelta(days=1)
 
@@ -822,7 +872,7 @@ async def dashboard_ab_testing(request: Request):
                     "description": f"{best['name']} achieves {best['booking_rate']:.0f}% booking rate. Excellent conversion!"
                 })
 
-            # Check for efficiency vs naturalness trade-off
+            # Check for trade-offs
             efficient_variant = max(variant_stats, key=lambda x: x["avg_efficiency"])
             natural_variant = max(variant_stats, key=lambda x: x["avg_naturalness"])
 
