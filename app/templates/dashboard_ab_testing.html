@@ -1,0 +1,332 @@
+{% extends "base.html" %}
+
+{% block title %}A/B Testing{% endblock %}
+
+{% block content %}
+<!-- Summary Stats -->
+<div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+    <div class="stat-card">
+        <div class="stat-label">Total Variants</div>
+        <div class="stat-value">{{ variants|length }}</div>
+        <div class="stat-change">Active experiments</div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-label">Total Calls</div>
+        <div class="stat-value">{{ total_calls }}</div>
+        <div class="stat-change">All variants combined</div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-label">Best Performer</div>
+        <div class="stat-value">{{ best_variant }}</div>
+        <div class="stat-change">{{ "%.1f"|format(best_score) }}/100 avg quality</div>
+    </div>
+</div>
+
+<!-- Variant Comparison Table -->
+<div class="card" style="margin-top: 24px; animation-delay: 0.2s;">
+    <h2>🧪 Variant Performance Comparison</h2>
+
+    <div class="table-container">
+        <table>
+            <thead>
+            <tr>
+                <th>Variant</th>
+                <th>Calls</th>
+                <th>Avg Quality</th>
+                <th>Booking Rate</th>
+                <th>Efficiency</th>
+                <th>Accuracy</th>
+                <th>Naturalness</th>
+                <th>Winner?</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for variant in variant_stats %}
+            <tr>
+                <td>
+                    <strong>{{ variant.name }}</strong>
+                    <div style="font-size: 11px; color: #718096; margin-top: 2px;">
+                        {{ variant.description }}
+                    </div>
+                </td>
+                <td>{{ variant.call_count }}</td>
+                <td>
+                    <strong style="color: {% if variant.avg_quality >= 85 %}#48bb78{% elif variant.avg_quality >= 70 %}#4299e1{% else %}#ed8936{% endif %}">
+                        {{ "%.1f"|format(variant.avg_quality) }}
+                    </strong>
+                </td>
+                <td>{{ "%.0f"|format(variant.booking_rate) }}%</td>
+                <td>{{ "%.1f"|format(variant.avg_efficiency) }}</td>
+                <td>{{ "%.1f"|format(variant.avg_accuracy) }}</td>
+                <td>{{ "%.1f"|format(variant.avg_naturalness) }}</td>
+                <td>
+                    {% if variant.is_winner %}
+                    <span style="font-size: 20px;">🏆</span>
+                    {% elif variant.is_significant %}
+                    <span style="font-size: 16px;">✅</span>
+                    {% else %}
+                    <span style="color: #a0aec0;">-</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div style="margin-top: 16px; padding: 12px; background: #f7fafc; border-radius: 8px; font-size: 13px; color: #4a5568;">
+        <strong>📊 Statistical Note:</strong>
+        Variants need at least 30 calls for reliable comparison.
+        Winner determined by quality score with >95% confidence (p < 0.05).
+    </div>
+</div>
+
+<!-- Quality Score Comparison Chart -->
+<div class="card" style="margin-top: 24px; animation-delay: 0.3s;">
+    <h2>📊 Quality Score by Variant</h2>
+    <div class="chart-container">
+        <canvas id="variantComparisonChart"></canvas>
+    </div>
+</div>
+
+<!-- Dimension Breakdown by Variant -->
+<div class="card" style="margin-top: 24px; animation-delay: 0.4s;">
+    <h2>🎯 Dimensional Breakdown</h2>
+    <div class="chart-container" style="height: 400px;">
+        <canvas id="dimensionRadarChart"></canvas>
+    </div>
+</div>
+
+<!-- Time Series -->
+<div class="card" style="margin-top: 24px; animation-delay: 0.5s;">
+    <h2>📈 Quality Over Time</h2>
+    <div class="chart-container">
+        <canvas id="timeSeriesChart"></canvas>
+    </div>
+</div>
+
+<!-- Recommendations -->
+<div class="card" style="margin-top: 24px; animation-delay: 0.6s;">
+    <h2>💡 Recommendations</h2>
+
+    {% if recommendations %}
+    <div style="margin-top: 16px;">
+        {% for rec in recommendations %}
+        <div style="padding: 16px; margin-bottom: 12px; background: {% if rec.type == 'success' %}#f0fff4{% elif rec.type == 'warning' %}#fffaf0{% else %}#f7fafc{% endif %}; border-left: 4px solid {% if rec.type == 'success' %}#48bb78{% elif rec.type == 'warning' %}#ed8936{% else %}#4299e1{% endif %}; border-radius: 8px;">
+            <div style="font-weight: 600; color: #2d3748; margin-bottom: 4px;">
+                {% if rec.type == 'success' %}✅{% elif rec.type == 'warning' %}⚠️{% else %}💡{% endif %}
+                {{ rec.title }}
+            </div>
+            <div style="color: #4a5568; font-size: 14px; line-height: 1.5;">
+                {{ rec.description }}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div style="padding: 32px; text-align: center; color: #a0aec0;">
+        <div style="font-size: 48px; margin-bottom: 8px;">🧪</div>
+        <div>Not enough data yet. Need at least 30 calls per variant for recommendations.</div>
+    </div>
+    {% endif %}
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Variant Comparison Bar Chart
+    const variantCtx = document.getElementById('variantComparisonChart').getContext('2d');
+    const variantData = {{ variant_chart_data|tojson }};
+
+    const variantChart = new Chart(variantCtx, {
+        type: 'bar',
+        data: {
+            labels: variantData.labels,
+            datasets: [
+                {
+                    label: 'Overall Quality',
+                    data: variantData.quality,
+                    backgroundColor: 'rgba(102, 126, 234, 0.8)',
+                    borderRadius: 8
+                },
+                {
+                    label: 'Booking Rate %',
+                    data: variantData.booking_rate,
+                    backgroundColor: 'rgba(72, 187, 120, 0.8)',
+                    borderRadius: 8
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    max: 100,
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.05)'
+                    }
+                },
+                x: {
+                    grid: {
+                        display: false
+                    }
+                }
+            },
+            plugins: {
+                legend: {
+                    labels: {
+                        font: {
+                            family: 'Inter'
+                        }
+                    }
+                }
+            },
+            animation: {
+                duration: 1500,
+                easing: 'easeInOutQuart'
+            }
+        }
+    });
+
+    // Dimensional Radar Chart Comparison
+    const radarCtx = document.getElementById('dimensionRadarChart').getContext('2d');
+    const radarData = {{ radar_chart_data|tojson }};
+
+    const radarChart = new Chart(radarCtx, {
+        type: 'radar',
+        data: {
+            labels: ['Efficiency', 'Accuracy', 'Helpfulness', 'Naturalness', 'Professionalism'],
+            datasets: radarData.datasets.map((dataset, index) => ({
+                label: dataset.label,
+                data: dataset.data,
+                backgroundColor: dataset.backgroundColor,
+                borderColor: dataset.borderColor,
+                borderWidth: 2,
+                pointBackgroundColor: dataset.borderColor,
+                pointBorderColor: '#fff',
+                pointBorderWidth: 2,
+                pointRadius: 4,
+                pointHoverRadius: 6
+            }))
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                r: {
+                    beginAtZero: true,
+                    max: 100,
+                    ticks: {
+                        stepSize: 20,
+                        font: {
+                            family: 'Inter',
+                            size: 11
+                        }
+                    },
+                    pointLabels: {
+                        font: {
+                            family: 'Inter',
+                            size: 12,
+                            weight: '600'
+                        }
+                    },
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.1)'
+                    }
+                }
+            },
+            plugins: {
+                legend: {
+                    position: 'top',
+                    labels: {
+                        font: {
+                            family: 'Inter',
+                            size: 12
+                        },
+                        padding: 15,
+                        usePointStyle: true
+                    }
+                }
+            },
+            animation: {
+                duration: 2000,
+                easing: 'easeInOutQuart'
+            }
+        }
+    });
+
+    // Time Series Chart
+    const timeCtx = document.getElementById('timeSeriesChart').getContext('2d');
+    const timeData = {{ time_series_data|tojson }};
+
+    const timeChart = new Chart(timeCtx, {
+        type: 'line',
+        data: {
+            labels: timeData.labels,
+            datasets: timeData.datasets.map(dataset => ({
+                label: dataset.label,
+                data: dataset.data,
+                borderColor: dataset.borderColor,
+                backgroundColor: dataset.backgroundColor,
+                tension: 0.4,
+                fill: false,
+                borderWidth: 2,
+                pointRadius: 3,
+                pointHoverRadius: 5
+            }))
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                mode: 'index',
+                intersect: false
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    max: 100,
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.05)'
+                    },
+                    ticks: {
+                        font: {
+                            family: 'Inter'
+                        }
+                    }
+                },
+                x: {
+                    grid: {
+                        display: false
+                    },
+                    ticks: {
+                        font: {
+                            family: 'Inter'
+                        }
+                    }
+                }
+            },
+            plugins: {
+                legend: {
+                    labels: {
+                        font: {
+                            family: 'Inter',
+                            size: 12
+                        },
+                        usePointStyle: true
+                    }
+                }
+            },
+            animation: {
+                duration: 2000,
+                easing: 'easeInOutQuart'
+            }
+        }
+    });
+</script>
+{% endblock %}

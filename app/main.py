@@ -20,6 +20,8 @@ from agent.tools.reservation_tools import TOOL_DEFINITIONS, TOOL_FUNCTIONS
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 from sqlalchemy import func
+from scipy import stats
+import numpy as np
 
 load_dotenv()
 
@@ -613,6 +615,244 @@ async def api_metrics():
     finally:
         db.close()
 
+@app.get("/dashboard/ab-testing", response_class=HTMLResponse)
+async def dashboard_ab_testing(request: Request):
+    """A/B testing analysis dashboard"""
+    from services.database import CallMetrics, CallQuality
+
+    db = get_db()
+    try:
+        # Get all calls grouped by prompt version
+        calls_by_variant = {}
+        all_calls = db.query(CallMetrics).join(CallQuality).all()
+
+        for call in all_calls:
+            variant = call.prompt_version
+            if variant not in calls_by_variant:
+                calls_by_variant[variant] = []
+            calls_by_variant[variant].append(call)
+
+        # Define variant descriptions
+        variant_info = {
+            "v1_baseline": {
+                "name": "v1_baseline",
+                "description": "Standard professional greeting, formal tone"
+            },
+            "v2_friendly": {
+                "name": "v2_friendly",
+                "description": "Warm greeting, casual friendly tone"
+            },
+            "v3_efficient": {
+                "name": "v3_efficient",
+                "description": "Brief greeting, get straight to business"
+            }
+        }
+
+        # Calculate stats for each variant
+        variant_stats = []
+        variant_chart_data = {
+            "labels": [],
+            "quality": [],
+            "booking_rate": []
+        }
+
+        for variant, calls in calls_by_variant.items():
+            if len(calls) == 0:
+                continue
+
+            # Calculate metrics
+            call_count = len(calls)
+            bookings = sum(1 for c in calls if c.booking_completed)
+            booking_rate = (bookings / call_count * 100) if call_count > 0 else 0
+
+            quality_scores = [c.quality.overall_score for c in calls if c.quality]
+            avg_quality = np.mean(quality_scores) if quality_scores else 0
+
+            efficiency_scores = [c.quality.efficiency_score for c in calls if c.quality]
+            avg_efficiency = np.mean(efficiency_scores) if efficiency_scores else 0
+
+            accuracy_scores = [c.quality.accuracy_score for c in calls if c.quality]
+            avg_accuracy = np.mean(accuracy_scores) if accuracy_scores else 0
+
+            naturalness_scores = [c.quality.naturalness_score for c in calls if c.quality]
+            avg_naturalness = np.mean(naturalness_scores) if naturalness_scores else 0
+
+            professionalism_scores = [c.quality.professionalism_score for c in calls if c.quality]
+            avg_professionalism = np.mean(professionalism_scores) if professionalism_scores else 0
+
+            variant_stats.append({
+                "name": variant,
+                "description": variant_info.get(variant, {}).get("description", "No description"),
+                "call_count": call_count,
+                "booking_rate": booking_rate,
+                "avg_quality": avg_quality,
+                "avg_efficiency": avg_efficiency,
+                "avg_accuracy": avg_accuracy,
+                "avg_naturalness": avg_naturalness,
+                "avg_professionalism": avg_professionalism,
+                "quality_scores": quality_scores,
+                "is_winner": False,
+                "is_significant": False
+            })
+
+            # Add to chart data
+            variant_chart_data["labels"].append(variant)
+            variant_chart_data["quality"].append(round(avg_quality, 1))
+            variant_chart_data["booking_rate"].append(round(booking_rate, 1))
+
+        # Sort by quality score
+        variant_stats.sort(key=lambda x: x["avg_quality"], reverse=True)
+
+        # Determine statistical significance (t-test between best and others)
+        if len(variant_stats) >= 2:
+            best_variant = variant_stats[0]
+            best_scores = best_variant["quality_scores"]
+
+            for variant in variant_stats[1:]:
+                other_scores = variant["quality_scores"]
+
+                # Need at least 30 samples for reliable t-test
+                if len(best_scores) >= 30 and len(other_scores) >= 30:
+                    t_stat, p_value = stats.ttest_ind(best_scores, other_scores)
+
+                    # If p < 0.05, the difference is statistically significant
+                    if p_value < 0.05:
+                        variant["is_significant"] = True
+
+            # Mark winner
+            if len(best_variant["quality_scores"]) >= 30:
+                best_variant["is_winner"] = True
+
+        # Determine best variant
+        best_variant_name = variant_stats[0]["name"] if variant_stats else "None"
+        best_score = variant_stats[0]["avg_quality"] if variant_stats else 0
+
+        # Prepare radar chart data (compare all variants)
+        colors = [
+            ('rgba(102, 126, 234, 0.2)', '#667eea'),  # Purple
+            ('rgba(72, 187, 120, 0.2)', '#48bb78'),   # Green
+            ('rgba(237, 137, 54, 0.2)', '#ed8936'),   # Orange
+        ]
+
+        radar_chart_data = {
+            "datasets": []
+        }
+
+        for i, variant in enumerate(variant_stats):
+            color = colors[i % len(colors)]
+            radar_chart_data["datasets"].append({
+                "label": variant["name"],
+                "data": [
+                    round(variant["avg_efficiency"], 1),
+                    round(variant["avg_accuracy"], 1),
+                    round(variant.get("avg_helpfulness", 100), 1),
+                    round(variant["avg_naturalness"], 1),
+                    round(variant["avg_professionalism"], 1)
+                ],
+                "backgroundColor": color[0],
+                "borderColor": color[1]
+            })
+
+        # Prepare time series data (quality over time by variant)
+        # Group by date for simplicity
+        time_series_data = {
+            "labels": [],
+            "datasets": []
+        }
+
+        # Get last 7 days
+        from datetime import datetime, timedelta
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=7)
+
+        # Generate date labels
+        current_date = start_date
+        while current_date <= end_date:
+            time_series_data["labels"].append(current_date.strftime("%m/%d"))
+            current_date += timedelta(days=1)
+
+        # Calculate daily averages for each variant
+        for i, variant_name in enumerate(sorted(calls_by_variant.keys())):
+            daily_scores = []
+            current_date = start_date
+
+            while current_date <= end_date:
+                day_start = current_date.replace(hour=0, minute=0, second=0)
+                day_end = current_date.replace(hour=23, minute=59, second=59)
+
+                day_calls = [c for c in calls_by_variant[variant_name]
+                             if day_start <= c.created_at <= day_end and c.quality]
+
+                if day_calls:
+                    avg_score = np.mean([c.quality.overall_score for c in day_calls])
+                    daily_scores.append(round(avg_score, 1))
+                else:
+                    daily_scores.append(None)  # No data for this day
+
+                current_date += timedelta(days=1)
+
+            color = colors[i % len(colors)]
+            time_series_data["datasets"].append({
+                "label": variant_name,
+                "data": daily_scores,
+                "borderColor": color[1],
+                "backgroundColor": color[0]
+            })
+
+        # Generate recommendations
+        recommendations = []
+
+        if len(variant_stats) >= 2 and variant_stats[0]["call_count"] >= 30:
+            best = variant_stats[0]
+            worst = variant_stats[-1]
+
+            quality_diff = best["avg_quality"] - worst["avg_quality"]
+
+            if quality_diff > 10:
+                recommendations.append({
+                    "type": "success",
+                    "title": f"Winner: {best['name']}",
+                    "description": f"This variant outperforms {worst['name']} by {quality_diff:.1f} points. Consider making this the default."
+                })
+
+            if best["booking_rate"] > 95:
+                recommendations.append({
+                    "type": "success",
+                    "title": "High Booking Rate",
+                    "description": f"{best['name']} achieves {best['booking_rate']:.0f}% booking rate. Excellent conversion!"
+                })
+
+            # Check for efficiency vs naturalness trade-off
+            efficient_variant = max(variant_stats, key=lambda x: x["avg_efficiency"])
+            natural_variant = max(variant_stats, key=lambda x: x["avg_naturalness"])
+
+            if efficient_variant["name"] != natural_variant["name"]:
+                recommendations.append({
+                    "type": "info",
+                    "title": "Trade-off Detected",
+                    "description": f"{efficient_variant['name']} is most efficient, but {natural_variant['name']} sounds most natural. Consider your priority."
+                })
+        else:
+            recommendations.append({
+                "type": "warning",
+                "title": "Insufficient Data",
+                "description": "Need at least 30 calls per variant for reliable statistical analysis. Continue collecting data."
+            })
+
+        return templates.TemplateResponse("dashboard_ab_testing.html", {
+            "request": request,
+            "variants": list(calls_by_variant.keys()),
+            "total_calls": len(all_calls),
+            "best_variant": best_variant_name,
+            "best_score": best_score,
+            "variant_stats": variant_stats,
+            "variant_chart_data": variant_chart_data,
+            "radar_chart_data": radar_chart_data,
+            "time_series_data": time_series_data,
+            "recommendations": recommendations
+        })
+    finally:
+        db.close()
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
