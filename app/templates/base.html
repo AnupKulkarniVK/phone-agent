@@ -268,32 +268,35 @@
     {% block extra_css %}{% endblock %}
 </head>
 <body>
-    <div class="container">
-        <!-- Header -->
-        <div class="header">
-            <h1>🍝 Luigi's Phone Agent - Quality Dashboard</h1>
-            <p>Real-time quality metrics and performance tracking</p>
-            
-            <div class="nav">
-                <a href="/dashboard" class="nav-link {% if request.url.path == '/dashboard' or request.url.path == '/dashboard/' %}active{% endif %}">
-                    📊 Overview
-                </a>
-                <a href="/dashboard/quality" class="nav-link {% if 'quality' in request.url.path %}active{% endif %}">
-                    🎯 Quality Analysis
-                </a>
-                <a href="/reservations" class="nav-link" target="_blank">
-                    📅 Reservations
-                </a>
-                <a href="/metrics" class="nav-link" target="_blank">
-                    📈 Raw Data
-                </a>
-            </div>
+<div class="container">
+    <!-- Header -->
+    <div class="header">
+        <h1>🍝 Luigi's Phone Agent - Quality Dashboard</h1>
+        <p>Real-time quality metrics and performance tracking</p>
+
+        <div class="nav">
+            <a href="/dashboard" class="nav-link {% if request.url.path == '/dashboard' or request.url.path == '/dashboard/' %}active{% endif %}">
+                📊 Overview
+            </a>
+            <a href="/dashboard/quality" class="nav-link {% if 'quality' in request.url.path %}active{% endif %}">
+                🎯 Quality Analysis
+            </a>
+            <a href="/dashboard/ab-testing" class="nav-link {% if 'ab-testing' in request.url.path %}active{% endif %}">
+                🧪 A/B Testing
+            </a>
+            <a href="/reservations" class="nav-link" target="_blank">
+                📅 Reservations
+            </a>
+            <a href="/metrics" class="nav-link" target="_blank">
+                📈 Raw Data
+            </a>
         </div>
-        
-        <!-- Main Content -->
-        {% block content %}{% endblock %}
     </div>
-    
-    {% block extra_js %}{% endblock %}
+
+    <!-- Main Content -->
+    {% block content %}{% endblock %}
+</div>
+
+{% block extra_js %}{% endblock %}
 </body>
 </html>
